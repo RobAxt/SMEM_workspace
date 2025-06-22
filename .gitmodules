@@ -1,6 +1,6 @@
 [submodule "SMEM-MP"]
 	path = SMEM-MP
-	url = git@github.com:RobAxt/SMEM-MR.git
+	url = git@github.com:RobAxt/SMEM-MP.git
 [submodule "SMEM-MR"]
 	path = SMEM-MR
 	url = git@github.com:RobAxt/SMEM-MR.git
