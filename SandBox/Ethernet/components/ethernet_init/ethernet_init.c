@@ -12,18 +12,6 @@
 #include "driver/spi_master.h"
 #include <string.h>
 
-
-#define SPI_ETHERNETS_NUM           1
-
-#define INIT_SPI_ETH_MODULE_CONFIG(eth_module_config)                                      \
-    do {                                                                                        \
-        eth_module_config.spi_cs_gpio = CONFIG_EXAMPLE_ETH_SPI_CS0_GPIO;           \
-        eth_module_config.int_gpio = CONFIG_EXAMPLE_ETH_SPI_INT0_GPIO;             \
-        eth_module_config.polling_ms = CONFIG_EXAMPLE_ETH_SPI_POLLING0_MS;         \
-        eth_module_config.phy_reset_gpio = CONFIG_EXAMPLE_ETH_SPI_PHY_RST0_GPIO;   \
-        eth_module_config.phy_addr = CONFIG_EXAMPLE_ETH_SPI_PHY_ADDR0;                \
-    } while(0)
-
 typedef struct {
     uint8_t spi_cs_gpio;
     int8_t int_gpio;
@@ -154,12 +142,17 @@ esp_err_t example_eth_init(esp_eth_handle_t *eth_handles_out)
     eth_handles = malloc(sizeof(esp_eth_handle_t));
     memset(eth_handles, 0, sizeof(esp_eth_handle_t));
     ESP_GOTO_ON_FALSE(eth_handles != NULL, ESP_ERR_NO_MEM, err, TAG, "no memory");
-
-
+    // Initialize SPI bus
     ESP_GOTO_ON_ERROR(spi_bus_init(), err, TAG, "SPI bus init failed");
     // Init specific SPI Ethernet module configuration from Kconfig (CS GPIO, Interrupt GPIO, etc.)
-    spi_eth_module_config_t spi_eth_module_config;
-    INIT_SPI_ETH_MODULE_CONFIG(spi_eth_module_config);
+    spi_eth_module_config_t spi_eth_module_config = {
+        .spi_cs_gpio = CONFIG_EXAMPLE_ETH_SPI_CS0_GPIO,
+        .int_gpio = CONFIG_EXAMPLE_ETH_SPI_INT0_GPIO,
+        .polling_ms = CONFIG_EXAMPLE_ETH_SPI_POLLING0_MS,
+        .phy_reset_gpio = CONFIG_EXAMPLE_ETH_SPI_PHY_RST0_GPIO,
+        .phy_addr = CONFIG_EXAMPLE_ETH_SPI_PHY_ADDR0,
+        .mac_addr = NULL, // will be set later
+    };
     // The SPI Ethernet module(s) might not have a burned factory MAC address, hence use manually configured address(es).
     // In this example, Locally Administered MAC address derived from ESP32x base MAC address is used.
     // Note that Locally Administered OUI range should be used only when testing on a LAN under your control!
@@ -168,7 +161,7 @@ esp_err_t example_eth_init(esp_eth_handle_t *eth_handles_out)
     uint8_t local_mac[ETH_ADDR_LEN];
     esp_derive_local_mac(local_mac, base_mac_addr);
     spi_eth_module_config.mac_addr = local_mac;
-
+    // Initialize SPI Ethernet module
     eth_handles = eth_init_spi(&spi_eth_module_config, NULL, NULL);
     ESP_GOTO_ON_FALSE(eth_handles, ESP_FAIL, err, TAG, "SPI Ethernet init failed");
 
@@ -178,7 +171,6 @@ esp_err_t example_eth_init(esp_eth_handle_t *eth_handles_out)
 err:
     free(eth_handles);
     return ret;
-
 }
 
 esp_err_t example_eth_deinit(esp_eth_handle_t *eth_handles)

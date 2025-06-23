@@ -82,8 +82,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     esp_netif_t *eth_netifs;
-    esp_eth_netif_glue_handle_t eth_netif_glues;
-
+    
     // Create instance of esp-netif for Ethernet(s)
     // Use ESP_NETIF_DEFAULT_ETH when just one Ethernet interface is used and you don't need to modify
     // default esp-netif configuration parameters.
@@ -94,15 +93,14 @@ void app_main(void)
     
     // Set static IP address for Ethernet interface
     esp_netif_ip_info_t ip_info = {
-        .ip = { ESP_IP4TOADDR(192, 168, 160, 2) }, // Set your desired static IP address
-        .netmask = { ESP_IP4TOADDR(255, 255, 255, 0) }, // Set your desired netmask
-        .gw = { ESP_IP4TOADDR(192, 168, 160, 1) } // Set your desired gateway
+        .ip = { ESP_IP4TOADDR(192, 168, 160, 2) }, // Set  static IP address
+        .netmask = { ESP_IP4TOADDR(255, 255, 255, 0) }, // Set netmask
+        .gw = { ESP_IP4TOADDR(192, 168, 160, 1) } // Set default gateway
     };
     ESP_ERROR_CHECK(esp_netif_set_ip_info(eth_netifs, &ip_info));
 
-    eth_netif_glues = esp_eth_new_netif_glue(eth_handles);
     // Attach Ethernet driver to TCP/IP stack
-    ESP_ERROR_CHECK(esp_netif_attach(eth_netifs, eth_netif_glues));
+    ESP_ERROR_CHECK(esp_netif_attach(eth_netifs, esp_eth_new_netif_glue(eth_handles)));
 
     // Register user defined event handers
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
