@@ -1,0 +1,34 @@
+menu "Example Configuration"
+
+    config BROKER_URL
+        string "Broker URL"
+        default "mqtt://mqtt.eclipseprojects.io"
+        help
+            URL of the broker to connect to
+    
+    config BROKER_PORT
+        int "Broker Port"
+        default 1883
+        help
+            Port of the broker to connect to
+
+    config BROKER_URL_FROM_STDIN
+        bool
+        default y if BROKER_URL = "FROM_STDIN"
+    
+    config BROKER_USERNAME
+        string "Broker Username"
+        default "dev"
+        help
+            Username for the MQTT broker, if required
+    config BROKER_CLIENT_ID
+        string "Broker Client ID"
+        default "esp32_mqtt_client"
+        help
+            Client ID for the MQTT connection, if required
+    config BROKER_PASSWORD
+        string "Broker Password"
+        default "dev12#45ice"
+        help
+            Password for the MQTT broker, if required
+endmenu

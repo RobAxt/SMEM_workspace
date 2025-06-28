@@ -1,0 +1,2 @@
+source /home/raxt/SMEM_workspace/SandBox/MQTT/build/bootloader/gdbinit/symbols
+source /home/raxt/SMEM_workspace/SandBox/MQTT/build/bootloader/gdbinit/connect
