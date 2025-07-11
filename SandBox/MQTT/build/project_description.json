@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "MQTT",
-    "project_version":    "bfa4bbb-dirty",
+    "project_version":    "54d89e7-dirty",
     "project_path":       "/home/raxt/SMEM_workspace/SandBox/MQTT",
     "idf_path":           "/home/raxt/Espressif/v5.4.1/esp-idf",
     "build_dir":          "/home/raxt/SMEM_workspace/SandBox/MQTT/build",
