@@ -1,0 +1,6 @@
+# Use a custom partition table in this project
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Zigbee logging default (puedes cambiar a DEBUG/INFO/WARN)
+CONFIG_ESP_ZIGBEE_LOG_LEVEL_INFO=y

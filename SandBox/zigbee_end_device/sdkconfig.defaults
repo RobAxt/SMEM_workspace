@@ -1,0 +1,24 @@
+# Use a custom partition table in this project
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Zigbee configuration
+CONFIG_ZB_ENABLED=y
+CONFIG_ZB_RADIO_NATIVE=y
+
+# Zigbee logging default (puedes cambiar a DEBUG/INFO/WARN)
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Enable IEEE 802.15.4
+CONFIG_IEEE802154_ENABLED=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Watchdog - aumentar timeouts para debug
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# Main task stack size
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
