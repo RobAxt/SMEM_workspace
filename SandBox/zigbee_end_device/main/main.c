@@ -16,28 +16,22 @@
 
 static const char *TAG = "zb_end";
 
-/* CONFIG RED - ajusta según necesites */
-#define ZB_CHANNEL 11
-#define ZB_PANID 0x1AAA
-static uint8_t zb_ext_panid[8] = {0x00,0x12,0x4b,0x00,0xab,0xcd,0xef,0x01};
-static uint8_t zb_network_key[16] = { 0x01,0x03,0x05,0x07,0x09,0x0b,0x0d,0x0f,0x10,0x12,0x14,0x16,0x18,0x1A,0x1C,0x1E };
-
-#define DEST_SHORT_ADDR 0x0000
-#define DEST_ENDPOINT 1
+/* CONFIG */
 #define SRC_ENDPOINT 1
 #define CLUSTER_ID 0xFC00
 
 /* Intervalo de envío en ms */
-#define SEND_INTERVAL_MS 1000
+#define SEND_INTERVAL_MS 15000
+
+static uint8_t value = 0;
 
 /* Función que obtiene el valor "analógico" de 1 byte.
-   Actualmente simula un valor incremental. Si quieres usar ADC,
+   Actualmente simula un valor incremental de 0-255. Si quieres usar ADC,
    reemplaza el contenido por la lectura ADC correspondiente. */
 static uint8_t get_analog_byte(void)
 {
-    static uint8_t v = 0;
-    v = ++v>=100? 0 : v; // simula señal analógica de 0..255
-    return v;
+    value++; // Incrementa de 0 a 255, luego vuelve a 0 automáticamente por overflow
+    return value;
 }
 
 static bool device_joined = false;
@@ -61,6 +55,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
         } else {
             ESP_LOGE(TAG, "Failed to initialize Zigbee stack (status: %d)", err_status);
+            ESP_LOGW(TAG, "Borrando configuración Zigbee y reiniciando...");
+            esp_zb_nvram_erase_at_start(true);
+            esp_restart();
         }
         break;
     case ESP_ZB_BDB_SIGNAL_STEERING:
@@ -72,31 +69,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      extended_pan_id[3], extended_pan_id[2], extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel());
             
-            // Configurar reporting automático
-            esp_zb_zcl_reporting_info_t reporting_info = {
-                .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-                .ep = SRC_ENDPOINT,
-                .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
-                .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-                .attr_id = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-                .u = {
-                    .send_info = {
-                        .min_interval = 1,
-                        .max_interval = 10,
-                        .delta = {.u16 = 10},
-                        .def_min_interval = 1,
-                        .def_max_interval = 10,
-                    },
-                },
-                .dst = {
-                    .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-                    .short_addr = DEST_SHORT_ADDR,
-                    .endpoint = DEST_ENDPOINT,
-                },
-                .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-            };
-            esp_zb_zcl_update_reporting_info(&reporting_info);
-            
             device_joined = true;
         } else {
             ESP_LOGW(TAG, "Network steering was not successful (status: %d). Retrying in 5 seconds...", err_status);
@@ -104,7 +76,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         }
         break;
     default:
-        ESP_LOGI(TAG, "ZDO signal: %d, status: %d", sig_type, err_status);
+        ESP_LOGI(TAG, "Unhandled ZDO signal: %d, status: %d", sig_type, err_status);
         break;
     }
 }
@@ -118,46 +90,19 @@ static esp_zb_cluster_list_t *custom_clusters_create(void)
     esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(NULL);
     esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     
-    // Temperature measurement cluster con valor inicial y configuración de reporte
-    int16_t init_temp = 0;
-    esp_zb_temperature_meas_cluster_cfg_t temp_cfg = {
-        .measured_value = init_temp,
-        .min_value = -10000,  // -100°C
-        .max_value = 10000,   // +100°C
-    };
-    esp_zb_attribute_list_t *temp_meas_cluster = esp_zb_temperature_meas_cluster_create(&temp_cfg);
+    // Cluster manufacturer-specific (0xFC00) para enviar 1 byte de estado
+    esp_zb_attribute_list_t *custom_cluster = esp_zb_zcl_attr_list_create(CLUSTER_ID);
     
-    // Configurar el atributo como reportable
-    esp_zb_zcl_reporting_info_t reporting_info = {
-        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-        .ep = SRC_ENDPOINT,
-        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
-        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        .attr_id = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-        .u =
-{
-            .send_info =
-            {
-                .min_interval = 1,    // Mínimo 1 segundo entre reportes
-                .max_interval = 10,   // Máximo 10 segundos entre reportes
-                .delta =
-                {
-                    .u16 = 10,        // Reportar si cambia más de 0.1°C
-                },
-                .def_min_interval = 1,
-                .def_max_interval = 10,
-            },
-        },
-        .dst =
-        {
-            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-            .short_addr = DEST_SHORT_ADDR,
-            .endpoint = DEST_ENDPOINT,
-        },
-        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    };
+    // Atributo: Estado (1 byte, ID 0x0000)
+    esp_zb_custom_cluster_add_custom_attr(
+        custom_cluster,
+        0x0000,                             // Attribute ID
+        ESP_ZB_ZCL_ATTR_TYPE_U8,            // Tipo: uint8
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE,  // Acceso lectura/escritura
+        &value                              // Valor inicial de la variable "value"
+    );
     
-    esp_zb_cluster_list_add_temperature_meas_cluster(cluster_list, temp_meas_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    esp_zb_cluster_list_add_custom_cluster(cluster_list, custom_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     
     return cluster_list;
 }
@@ -194,56 +139,34 @@ static void zigbee_init_and_start(void)
     esp_zb_ep_list_t *ep_list = custom_ep_list_create();
     esp_zb_device_register(ep_list);
     
-    ESP_LOGI(TAG, "Inicializando Zigbee (End Device)...");
-    
-    // Configurar para buscar en TODOS los canales (importante para encontrar el coordinator)
-    ESP_LOGI(TAG, "Scanning all Zigbee channels (11-26)...");
+    // Escanear todos los canales para encontrar la red
     esp_zb_set_primary_network_channel_set(ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK);
     
+    ESP_LOGI(TAG, "Inicializando Zigbee End Device...");
     ESP_ERROR_CHECK(esp_zb_start(false));
-    
-    ESP_LOGI(TAG, "Zigbee stack started. Waiting to join network...");
 }
 
-/* Enviar 1 byte al coordinator actualizando y forzando reporte */
-static esp_err_t send_one_byte(uint8_t b)
-{
-    if (!device_joined) {
-        ESP_LOGW(TAG, "Device not joined yet, skipping send");
-        return ESP_FAIL;
-    }
-    
-    // Convertir el byte a valor de temperatura (en formato int16 * 100)
-    int16_t temp_value = (int16_t)b * 100;
-    
-    // Actualizar el atributo localmente
-    esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(
-        SRC_ENDPOINT,
-        ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-        &temp_value,
-        false
-    );
-    
-    if (status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Valor actualizado: byte=%u (temp=%d.%02d°C)", b, b, 0);
-        return ESP_OK;
-    } else {
-        ESP_LOGW(TAG, "Set attribute failed: %d", status);
-        return ESP_FAIL;
-    }
-}
-
-/* Tarea para enviar datos periódicamente */
+/* Tarea para actualizar el atributo periódicamente */
 static void send_data_task(void *pvParameters)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(SEND_INTERVAL_MS));
         
         if (device_joined) {
-            uint8_t v = get_analog_byte();
-            send_one_byte(v);
+            uint8_t value = get_analog_byte();
+            // Actualizar el atributo local
+            esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(
+                SRC_ENDPOINT,
+                CLUSTER_ID,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                0x0000,
+                &value,
+                false
+            );
+            ESP_LOGI(TAG, "Endpoint: 0x%02hX - Cluster: 0x%04hX - Attribute: 0x%04hX, Value: 0x%02hX",
+                                         SRC_ENDPOINT, CLUSTER_ID, 0x0000, value);
+            if (status != ESP_ZB_ZCL_STATUS_SUCCESS) 
+                ESP_LOGW(TAG, "Set attribute failed: %d", status);
         }
     }
 }
@@ -271,6 +194,9 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // DESCOMENTAR ESTA LÍNEA PARA FORZAR BÚSQUEDA DE NUEVA RED (solo cuando cambias coordinador)
+    // esp_zb_nvram_erase_at_start(true);
 
     // Crear tarea Zigbee con stack más grande
     xTaskCreate(esp_zb_task, "esp_zb_task", 8192, NULL, 5, NULL);
