@@ -146,6 +146,50 @@ static void zigbee_init_and_start(void)
     ESP_ERROR_CHECK(esp_zb_start(false));
 }
 
+/* Función comentada para enviar reporte del atributo al coordinador */
+/*
+static esp_err_t send_attribute_report(uint8_t state)
+{
+    if (!device_joined) {
+        ESP_LOGW(TAG, "Device not joined yet, skipping send");
+        return ESP_FAIL;
+    }
+
+    // Actualizar el atributo local
+    esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(
+        SRC_ENDPOINT,
+        CLUSTER_ID,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        0x0000,
+        &state,
+        false
+    );
+
+    if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGW(TAG, "Set attribute failed: %d", status);
+        return ESP_FAIL;
+    }
+
+    // Enviar comando de reporte al coordinador
+    esp_zb_zcl_report_attr_cmd_t report_cmd = {
+        .zcl_basic_cmd = {
+            .src_endpoint = SRC_ENDPOINT,
+            .dst_endpoint = 1,
+            .dst_addr_u.addr_short = 0x0000,  // Coordinador
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID = CLUSTER_ID,
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
+        .attributeID = 0x0000,
+    };
+
+    esp_zb_zcl_report_attr_cmd_req(&report_cmd);
+    ESP_LOGI(TAG, "📤 Reporte enviado al coordinador: 0x%02X (%u)", state, state);
+
+    return ESP_OK;
+}
+*/
+
 /* Tarea para actualizar el atributo periódicamente */
 static void send_data_task(void *pvParameters)
 {

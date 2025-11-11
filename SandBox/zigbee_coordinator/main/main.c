@@ -19,6 +19,8 @@ static const char *TAG = "zb_coord";
 static uint16_t connected_ed_addr = 0x0000;
 static bool read_in_progress = false;
 static bool polling_active = false;
+static bool use_short_interval = false;
+static uint8_t consecutive_errors = 0;
 
 /* Declaración forward */
 static void read_state_callback(uint8_t param);
@@ -26,6 +28,9 @@ static void read_state_callback(uint8_t param);
 /* Callback para respuestas de lectura */
 static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_t *message)
 {
+    ESP_LOGD(TAG, "📥 Recibida respuesta de lectura - status: %d, addr: 0x%04x", 
+             message->info.status, message->info.src_address.u.short_addr);
+    
     read_in_progress = false;
     
     if (message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS) {
@@ -42,9 +47,33 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
             }
             variable = variable->next;
         }
+        
+        // Resetear contador de errores en lecturas exitosas
+        consecutive_errors = 0;
+        use_short_interval = false;  // Resetear a intervalo normal en lecturas exitosas
+        
+        // Programar siguiente lectura solo si polling sigue activo
+        if (polling_active) {
+            esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS);
+        }
     } else {
-        ESP_LOGW(TAG, "⚠️  Error al leer de 0x%04x: status=%d - dispositivo puede estar desconectado",
-                 message->info.src_address.u.short_addr, message->info.status);
+        consecutive_errors++;
+        ESP_LOGW(TAG, "⚠️  Error al leer de 0x%04x: status=%d (errores consecutivos: %d)",
+                 message->info.src_address.u.short_addr, message->info.status, consecutive_errors);
+        
+        // Si hay demasiados errores consecutivos, detener polling hasta reconexión
+        if (consecutive_errors >= 5) {
+            ESP_LOGW(TAG, "❌ Demasiados errores consecutivos, deteniendo polling hasta reconexión");
+            polling_active = false;
+            consecutive_errors = 0;
+            return ESP_OK;
+        }
+        
+        // Reintentar en caso de error, pero con intervalo más corto para diagnóstico
+        if (polling_active) {
+            use_short_interval = true;  // Usar intervalo corto para diagnóstico rápido
+            esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS / 2);
+        }
     }
     
     return ESP_OK;
@@ -111,15 +140,13 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal)
             
             connected_ed_addr = dev_annce_params->device_short_addr;
             read_in_progress = false;  // Resetear flag por si había lectura pendiente
+            use_short_interval = false;  // Resetear a intervalo normal cuando se reconecta
+            consecutive_errors = 0;  // Resetear contador de errores en reconexión
             
-            // Solo iniciar polling si no está ya activo
-            if (!polling_active) {
-                polling_active = true;
-                ESP_LOGI(TAG, "Iniciando polling cada %d segundos...", POLL_INTERVAL_MS / 1000);
-                esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS);
-            } else {
-                ESP_LOGI(TAG, "Polling ya activo, usando dirección actualizada");
-            }
+            // Reiniciar polling en cada reconexión para asegurar funcionamiento
+            polling_active = true;
+            ESP_LOGI(TAG, "Iniciando/reiniciando polling cada %d segundos...", POLL_INTERVAL_MS / 1000);
+            esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS);
         }
         break;
         
@@ -133,6 +160,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal)
         connected_ed_addr = 0x0000;
         read_in_progress = false;
         polling_active = false;  // Permitir reiniciar polling cuando se reconecte
+        use_short_interval = false;  // Resetear intervalo
+        consecutive_errors = 0;  // Resetear contador de errores
         ESP_LOGI(TAG, "Esperando nuevo dispositivo...");
         break;
         
@@ -172,9 +201,21 @@ static esp_zb_ep_list_t *coordinator_ep_create(void)
 /* Callback de lectura periódica */
 static void read_state_callback(uint8_t param)
 {
-    if (connected_ed_addr != 0x0000 && !read_in_progress) {
+    ESP_LOGD(TAG, "🔄 Callback de polling ejecutado - addr: 0x%04x, read_in_progress: %d", 
+             connected_ed_addr, read_in_progress);
+    
+    if (connected_ed_addr != 0x0000) {
+        // Si hay una lectura en progreso, asumir que falló y resetear
+        if (read_in_progress) {
+            ESP_LOGW(TAG, "⚠️  Lectura anterior pendiente, reseteando...");
+            read_in_progress = false;
+            consecutive_errors++;
+        }
+        
         read_in_progress = true;
         
+        uint16_t attr_id = 0x0000;
+
         esp_zb_zcl_read_attr_cmd_t read_req = {
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
             .clusterID = CLUSTER_ID,
@@ -184,15 +225,14 @@ static void read_state_callback(uint8_t param)
                 .src_endpoint = 1,
             },
             .attr_number = 1,
+            .attr_field = &attr_id,
         };
-        
-        uint16_t attr_id = 0x0000;
-        read_req.attr_field = &attr_id;
-        
+         
+        ESP_LOGD(TAG, "📤 Enviando petición de lectura a 0x%04x", connected_ed_addr);
         esp_zb_zcl_read_attr_cmd_req(&read_req);
+    } else {
+        ESP_LOGW(TAG, "⚠️  No hay dispositivo conectado, saltando petición");
     }
-    
-    esp_zb_scheduler_alarm(read_state_callback, 0, POLL_INTERVAL_MS);
 }
 
 void app_main(void)
@@ -213,14 +253,14 @@ void app_main(void)
         .nwk_cfg.zczr_cfg.max_children = 16,
     };
 
-    ESP_LOGI(TAG, "Inicializando stack Zigbee...");
+    ESP_LOGD(TAG, "Inicializando stack Zigbee...");
     esp_zb_init(&zb_cfg);
     esp_zb_device_register(coordinator_ep_create());
     esp_zb_set_channel_mask(1 << ZIGBEE_CHANNEL);
     zb_bdb_set_legacy_device_support(1);
     zb_set_installcode_policy(false);
     
-    ESP_LOGI(TAG, "Canal: %d, Max children: %d", ZIGBEE_CHANNEL, 16);
+    ESP_LOGD(TAG, "Canal: %d, Max children: %d", ZIGBEE_CHANNEL, 16);
 
     /* Registrar callbacks */
     esp_zb_core_action_handler_register(zb_action_handler);
