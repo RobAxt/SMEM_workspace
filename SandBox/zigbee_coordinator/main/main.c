@@ -23,9 +23,11 @@
 #include "esp_zigbee_core.h"
 #include "esp_zigbee_type.h"
 #include "esp_zigbee_endpoint.h"
+#include "nwk/esp_zigbee_nwk.h"
 #include "zboss_api.h"
 
 /** @brief Etiqueta para los logs del coordinador */
+
 static const char *TAG = "zb_coord";
 
 /**
@@ -40,7 +42,7 @@ static const char *TAG = "zb_coord";
 #define ZIGBEE_CHANNEL      11
 
 /** @brief Intervalo entre lecturas de datos en milisegundos (5 segundos) */
-#define POLL_INTERVAL_MS    5000
+static uint32_t POLL_INTERVAL_MS  = 5000;
 
 /** @} */
 
@@ -67,16 +69,6 @@ static bool read_in_progress = false;
  */
 static bool polling_active = false;
 
-/**
- * @brief Flag para usar intervalos cortos en caso de errores (no usado actualmente)
- */
-static bool use_short_interval = false;
-
-/**
- * @brief Contador de errores consecutivos de lectura
- * @note Se usa para detectar problemas de conectividad
- */
-static uint8_t consecutive_errors = 0;
 
 /** @} */
 
@@ -97,7 +89,7 @@ static void read_state_callback(uint8_t param);
  */
 static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_t *message)
 {
-    ESP_LOGD(TAG, "📥 Handler de respuesta llamado - status: %d, addr: 0x%04x", 
+    ESP_LOGD(TAG, "📥 Handler de respuesta llamado - status: %x, addr: 0x%04x", 
              message->info.status, message->info.src_address.u.short_addr);
     
     // Liberar el flag de lectura en progreso
@@ -105,58 +97,36 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
     
     // Verificar si la respuesta fue exitosa
     if (message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-        // Procesar todas las variables de atributos en la respuesta
+        // Procesar variables de atributos en la respuesta
         esp_zb_zcl_read_attr_resp_variable_t *variable = message->variables;
         
         while (variable) {
-            // Buscar el atributo específico que nos interesa (ID 0x0000, tipo uint8)
+            // Buscar el atributo de interés (ID 0x0000, tipo uint8)
             if (variable->attribute.id == 0x0000 && 
                 variable->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) {
                 
-                // Extraer el valor del sensor (un byte)
+                // Extraer el valor del sensor
                 uint8_t state_value = variable->attribute.data.value ? 
                                      *(uint8_t*)variable->attribute.data.value : 0;
                 
-                // Mostrar el valor recibido con formato hexadecimal y decimal
+                // Log del valor recibido
                 ESP_LOGI(TAG, "📊 Estado recibido de 0x%04x: 0x%02X (%u)",
                          message->info.src_address.u.short_addr, state_value, state_value);
             }
-            // Pasar al siguiente atributo en la respuesta
+            // Siguiente atributo
             variable = variable->next;
         }
         
-        // Resetear contador de errores en lecturas exitosas
-        consecutive_errors = 0;
-        use_short_interval = false;  // Resetear a intervalo normal en lecturas exitosas
-        
-        // Programar siguiente lectura solo si polling sigue activo
+        // Programar siguiente lectura si polling sigue activo
         if (polling_active) {
-            ESP_LOGD(TAG, "⏰ Programando siguiente lectura en %d ms", POLL_INTERVAL_MS);
+            ESP_LOGD(TAG, "⏰ Programando siguiente lectura en %ld ms", (long)POLL_INTERVAL_MS);
             esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS);
         }
     } else {
-        // Incrementar contador de errores consecutivos
-        consecutive_errors++;
-        
-        // Mostrar warning con información del error
-        ESP_LOGW(TAG, "⚠️  Error al leer de 0x%04x: status=%d (errores consecutivos: %d)",
-                 message->info.src_address.u.short_addr, message->info.status, consecutive_errors);
-        
-        // Si hay demasiados errores consecutivos, pausar polling temporalmente
-        if (consecutive_errors >= 5) {
-            ESP_LOGW(TAG, "⏸️  Pausando polling por errores, reintentando en 30 segundos...");
-            // Programar reintento en 30 segundos en lugar de detener completamente
-            ESP_LOGD(TAG, "⏰ Programando reintento en 30000 ms");
-            esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, 30000);
-            consecutive_errors = 0;  // Resetear contador para el reintento
-            return ESP_OK;
-        }
-        
-        // Reintentar en caso de error, pero con intervalo más corto para diagnóstico
-        if (polling_active) {
-            ESP_LOGD(TAG, "⏰ Reintentando en %d ms por error", POLL_INTERVAL_MS / 2);
-            esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS / 2);
-        }
+        // Log de error de lectura
+        ESP_LOGW(TAG, "⚠️  Error al leer de 0x%04x: status=%u",
+                 message->info.src_address.u.short_addr, (unsigned)message->info.status);
+ 
     }
     
     return ESP_OK;
@@ -229,8 +199,16 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal)
     // Red Zigbee formada exitosamente
     case ESP_ZB_BDB_SIGNAL_FORMATION:
         if (err_status == ESP_OK) {
-            ESP_LOGI(TAG, "Red formada - PAN ID: 0x%04hx, Canal: %d", 
-                     esp_zb_get_pan_id(), esp_zb_get_current_channel());
+            ESP_LOGI(TAG, "Red formada - PAN ID: 0x%04hx, Canal: %u", 
+                     esp_zb_get_pan_id(), (unsigned)esp_zb_get_current_channel());
+            // Imprimir la dirección IEEE real del coordinador
+            uint8_t ieee_addr[8] = {0};
+            esp_zb_get_long_address(ieee_addr);
+            char ieee_str[3*8] = {0};
+            for (int i = 0; i < 8; ++i) {
+                sprintf(ieee_str + i*3, "%02X%s", ieee_addr[7-i], (i < 7) ? ":" : "");
+            }
+            ESP_LOGI(TAG, "IEEE Address: %s", ieee_str);
             ESP_LOGI(TAG, "Abriendo red para dispositivos...");
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
         } else {
@@ -257,12 +235,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal)
             // Actualizar dirección del dispositivo conectado
             connected_ed_addr = dev_annce_params->device_short_addr;
             read_in_progress = false;  // Resetear flag por si había lectura pendiente
-            use_short_interval = false;  // Resetear a intervalo normal cuando se reconecta
-            consecutive_errors = 0;  // Resetear contador de errores en reconexión
             
             // Reiniciar polling en cada reconexión para asegurar funcionamiento
             polling_active = true;
-            ESP_LOGI(TAG, "Iniciando/reiniciando polling cada %d segundos...", POLL_INTERVAL_MS / 1000);
+            ESP_LOGI(TAG, "Iniciando/reiniciando polling cada %ld segundos...", (long)POLL_INTERVAL_MS / 1000);
             esp_zb_scheduler_alarm((esp_zb_callback_t)read_state_callback, 0, POLL_INTERVAL_MS);
         }
         break;
@@ -279,12 +255,30 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal)
         connected_ed_addr = 0x0000;
         read_in_progress = false;
         polling_active = false;  // Permitir reiniciar polling cuando se reconecte
-        use_short_interval = false;  // Resetear intervalo
-        consecutive_errors = 0;  // Resetear contador de errores
         ESP_LOGI(TAG, "Esperando nuevo dispositivo...");
         break;
-        
+    
+       case ESP_ZB_NLME_STATUS_INDICATION:
+            esp_zb_zdo_signal_nwk_status_indication_params_t *nlme =
+                (esp_zb_zdo_signal_nwk_status_indication_params_t *)esp_zb_app_signal_get_params(signal->p_app_signal);
+            ESP_LOGW(TAG, "� NLME_STATUS_INDICATION: nwk_status=0x%02X, nwk_addr=0x%04X, unknown_cmd=%u",
+                     nlme->status, nlme->network_addr, nlme->unknown_command_id);
+
+            // Código 0x09 = NWK_NO_ROUTE (no hay ruta al dispositivo)
+            if (nlme->status == ESP_ZB_NWK_COMMAND_STATUS_PARENT_LINK_FAILURE) 
+            {
+                ESP_LOGW(TAG, "🚫 No hay ruta al dispositivo 0x%04X - posible congestión de red", nlme->network_addr);
+            }
+        break;
+    
+    case ESP_ZB_ZDO_DEVICE_UNAVAILABLE:
+        esp_zb_zdo_device_unavailable_params_t *unavail_params =
+            (esp_zb_zdo_device_unavailable_params_t *)esp_zb_app_signal_get_params(signal->p_app_signal);
+        ESP_LOGW(TAG, "Dispositivo no disponible - addr: 0x%04hx", unavail_params->short_addr);
+
+        break;
     default:
+        ESP_LOGI(TAG, "Unhandled ZDO signal: %u, status: 0x%x", (unsigned)sig_type, (unsigned)err_status);
         break;
     }
 }
@@ -352,22 +346,12 @@ static esp_zb_ep_list_t *coordinator_ep_create(void)
  */
 static void read_state_callback(uint8_t param)
 {
-    ESP_LOGD(TAG, "🔄 Callback de polling ejecutado - addr: 0x%04x, read_in_progress: %d", 
-             connected_ed_addr, read_in_progress);
+    ESP_LOGD(TAG, "🔄 Callback de polling ejecutado - addr: 0x%04x, read_in_progress: %u",
+             connected_ed_addr, (unsigned)read_in_progress);
     
     // Verificar que hay un dispositivo conectado y polling activo
     if (connected_ed_addr != 0x0000 && polling_active) {
-        // Si hay una lectura en progreso, asumir que falló y resetear
-        if (read_in_progress) {
-            ESP_LOGW(TAG, "⏰ Timeout: Lectura anterior pendiente (%d errores consecutivos), reseteando...", consecutive_errors);
-            read_in_progress = false;
-            consecutive_errors++;
-        }
-        
-        read_in_progress = true;
-        
         uint16_t attr_id = 0x0000;
-
         esp_zb_zcl_read_attr_cmd_t read_req = {
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
             .clusterID = CLUSTER_ID,
@@ -379,8 +363,7 @@ static void read_state_callback(uint8_t param)
             .attr_number = 1,
             .attr_field = &attr_id,
         };
-         
-        ESP_LOGD(TAG, "📤 Enviando petición de lectura a 0x%04x (cluster: 0x%04x, attr: 0x%04x, endpoint: %d->%d)", 
+        ESP_LOGD(TAG, "📤 Enviando petición de lectura a 0x%04x (cluster: 0x%04x, attr: 0x%04x, endpoint: %u->%u)", 
                  connected_ed_addr, CLUSTER_ID, attr_id, read_req.zcl_basic_cmd.src_endpoint, read_req.zcl_basic_cmd.dst_endpoint);
         esp_zb_zcl_read_attr_cmd_req(&read_req);
         ESP_LOGD(TAG, "✅ Petición enviada");
@@ -439,13 +422,13 @@ void app_main(void)
     // Deshabilitar política de install code (para desarrollo)
     zb_set_installcode_policy(false);
     
-    ESP_LOGD(TAG, "Canal: %d, Max children: %d", ZIGBEE_CHANNEL, 16);
+    ESP_LOGD(TAG, "Canal: %u, Max children: %u", (unsigned)ZIGBEE_CHANNEL, 16);
 
     // Registrar el handler para comandos ZCL (respuestas de lectura)
     esp_zb_core_action_handler_register(zb_action_handler);
-
+  
     // Iniciar el stack Zigbee (false = no esperar por formación de red)
-    ESP_ERROR_CHECK(esp_zb_start(false));
+    ESP_ERROR_CHECK(esp_zb_start(false));    
     
     // Entrar al loop principal del stack Zigbee (esta función nunca retorna)
     esp_zb_stack_main_loop();

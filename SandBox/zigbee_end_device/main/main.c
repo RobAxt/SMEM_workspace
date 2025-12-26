@@ -98,7 +98,13 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
      */
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
         ESP_LOGI(TAG, "Zigbee stack initialized");
+        // Esta llamada inicia el proceso de commissioning.
+        // El stack Zigbee puede enviar un ZDP Permit Join Request al coordinador como parte de este proceso.
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
+
+        // Imprimir dirección IEEE del dispositivo
+        esp_zb_ieee_addr_t ieee_addr;
+        esp_zb_get_long_address(ieee_addr); 
         break;
 
     /**
@@ -109,6 +115,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
         if (err_status == ESP_OK) {
             ESP_LOGI(TAG, "Start network steering");
+            // Esta llamada inicia el proceso de network steering.
+            // El stack Zigbee puede enviar un ZDP Permit Join Request al coordinador como parte de este proceso.
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
         } else {
             /**
@@ -136,6 +144,18 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      esp_zb_get_pan_id(), esp_zb_get_current_channel());
             
             device_joined = true; /**< Marca que el dispositivo está conectado */
+
+            // Obtener y mostrar la network key recibida del coordinador
+            uint8_t received_network_key[16];
+            if (esp_zb_secur_primary_network_key_get(received_network_key) == ESP_OK) {
+                ESP_LOGI(TAG, "Network Key recibida: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+                    received_network_key[0], received_network_key[1], received_network_key[2], received_network_key[3],
+                    received_network_key[4], received_network_key[5], received_network_key[6], received_network_key[7],
+                    received_network_key[8], received_network_key[9], received_network_key[10], received_network_key[11],
+                    received_network_key[12], received_network_key[13], received_network_key[14], received_network_key[15]);
+            } else {
+                ESP_LOGW(TAG, "No se pudo obtener la network key recibida");
+            }
         } else {
             /**
              * @brief Si falla la conexión, reintenta automáticamente cada 5 segundos
@@ -144,6 +164,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGW(TAG, "Network steering was not successful (status: %d). Retrying in 5 seconds...", err_status);
             esp_zb_scheduler_alarm((esp_zb_callback_t)esp_zb_bdb_start_top_level_commissioning, ESP_ZB_BDB_MODE_NETWORK_STEERING, 5000);
         }
+        break;
+    
+    case ESP_ZB_ZDO_DEVICE_UNAVAILABLE:
+        esp_zb_zdo_device_unavailable_params_t *unavail_params =
+            (esp_zb_zdo_device_unavailable_params_t *)esp_zb_app_signal_get_params(signal_struct->p_app_signal);
+        ESP_LOGW(TAG, "Dispositivo no disponible - addr: 0x%04hx", unavail_params->short_addr);
         break;
 
     /**
@@ -230,13 +256,14 @@ static void zigbee_init_and_start(void)
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED,    /**< Rol: End Device (dispositivo final) */
         .install_code_policy = false,            /**< No usar códigos de instalación */
         .nwk_cfg = {
-            .zczr_cfg = {
-                .max_children = 10,              /**< End Devices no tienen hijos, pero se configura por compatibilidad */
+            .zed_cfg = {
+                .ed_timeout = ESP_ZB_ED_AGING_TIMEOUT_256MIN, // Timeout largo para menos Data Request
+                .keep_alive = 60000, // 60 segundos (ajustable)
             },
         },
     };
     esp_zb_init(&zb_nwk_cfg);
-    
+
     // Crear dispositivo con nuestros clusters y endpoints
     esp_zb_ep_list_t *ep_list = custom_ep_list_create();
     esp_zb_device_register(ep_list);
